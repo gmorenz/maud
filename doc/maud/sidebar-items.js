@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["Markup","A block of HTML markup, as returned by the `html!` macro."]],"fn":[["escape","Escapes an HTML value."]]});
