@@ -44,9 +44,9 @@ impl<'cx> Renderer<'cx> {
     fn flush(&mut self) {
         if !self.tail.is_empty() {
             let expr = {
-                let w = self.w;
                 let s = &*self.tail;
-                quote_expr!(self.cx, $w.write_str($s))
+                //TODO deal with chaining
+                quote_expr!(self.cx, $s.as_bytes())
             };
             let stmt = self.cx.stmt_expr(self.cx.expr_try(expr.span, expr));
             self.stmts.push(stmt);
@@ -56,13 +56,8 @@ impl<'cx> Renderer<'cx> {
 
     /// Reifies the `Renderer` into a block of markup.
     pub fn into_expr(mut self) -> P<Expr> {
-        let Renderer { cx, w, stmts, .. } = { self.flush(); self };
-        quote_expr!(cx,
-            ::maud::rt::make_markup(|$w: &mut ::std::fmt::Write| -> Result<(), ::std::fmt::Error> {
-                use ::std::fmt::Write;
-                $stmts
-                Ok(())
-            }))
+        let Renderer { cx, stmts, .. } = { self.flush(); self };
+        quote_expr!(cx, $stmts )
     }
 
     /// Reifies the `Renderer` into a raw list of statements.
@@ -87,23 +82,22 @@ impl<'cx> Renderer<'cx> {
         let escaped;
         let s = match escape {
             Escape::PassThru => s,
-            Escape::Escape => { escaped = maud::escape(s); &*escaped },
+            //TODO remove unwrap
+            Escape::Escape => { escaped = maud::escape(s).unwrap(); &*escaped },
         };
         self.push_str(s);
     }
 
     /// Appends the result of an expression, with the specified escaping method.
     pub fn splice(&mut self, expr: P<Expr>, escape: Escape) {
-        let w = self.w;
         let expr = match escape {
             Escape::PassThru =>
-                quote_expr!(self.cx, write!($w, "{}", $expr)),
+                //TODO Deal with .chain?
+                //TODO Change format! to a custom Formatter which doesn't allocate
+                quote_expr!(self.cx, format!("{}", $expr).as_bytes()),
             Escape::Escape =>
-                quote_expr!(self.cx,
-                    write!(
-                        ::maud::rt::Escaper { inner: $w },
-                        "{}",
-                        $expr)),
+                // TODO (as above)
+                quote_expr!(self.cx,::maud::rt::Escaper::new( format!("{}", $expr).as_bytes() )),
         };
         let stmt = self.cx.stmt_expr(self.cx.expr_try(expr.span, expr));
         self.push(stmt);
