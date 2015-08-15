@@ -7,13 +7,13 @@
 
 use std::fmt;
 use std::io;
+use std::io::Read;
 
 /// Escapes an HTML value.
-pub fn escape(s: &str) -> String {
-    use std::fmt::Write;
+pub fn escape(s: &str) -> Result<String, io::Error> {
     let mut buf = String::new();
-    rt::Escaper { inner: &mut buf }.write_str(s).unwrap();
-    buf
+    try!( rt::Escaper::new( s.as_bytes() ).read_to_string(&mut buf) );
+    Ok(buf)
 }
 
 /// A block of HTML markup, as returned by the `html!` macro.
@@ -70,6 +70,7 @@ impl<F> ToString for Markup<F> where F: Fn(&mut fmt::Write) -> fmt::Result {
 #[doc(hidden)]
 pub mod rt {
     use std::fmt;
+    use std::io::{Read, Error};
     use super::Markup;
 
     #[inline]
@@ -79,23 +80,64 @@ pub mod rt {
         Markup { callback: f }
     }
 
-    pub struct Escaper<'a, 'b: 'a> {
-        pub inner: &'a mut (fmt::Write + 'b),
+    pub struct Escaper<T: Read> {
+        inner: T,
+        buffer: [u8; 5],
+        buffered: usize,
     }
 
-    impl<'a, 'b> fmt::Write for Escaper<'a, 'b> {
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            for c in s.chars() {
-                try!(match c {
-                    '&' => self.inner.write_str("&amp;"),
-                    '<' => self.inner.write_str("&lt;"),
-                    '>' => self.inner.write_str("&gt;"),
-                    '"' => self.inner.write_str("&quot;"),
-                    '\'' => self.inner.write_str("&#39;"),
-                    _ => write!(self.inner, "{}", c),
-                });
+    impl<T:Read> Escaper<T> {
+        pub fn new(inner: T) -> Escaper<T> {
+            Escaper {
+                inner: inner,
+                buffer: [0; 5],
+                buffered: 0,
             }
-            Ok(())
+        }
+        
+        // Attemps to write multiple character data to buf, otherwise stores in our buffer
+        // Assumes that buffer is empty
+        fn try_read(&mut self, mut data: &[u8], index: usize,  buf: &mut[u8]) -> Result<usize, Error> {
+            debug_assert!( self.buffered == 0 );
+            
+            let wrote = try!( data.read( &mut buf[..index] ) );
+            if wrote == data.len() { 
+                return Ok(wrote); 
+            }
+            else {
+                try!( (&self.buffer as &[u8]).read(&mut buf[..index + wrote]) );
+                return Ok(wrote);
+            }
+        }
+    }
+
+    impl<T:Read> Read for Escaper<T> {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+            let mut local_buf = [0];
+            let mut index = 0;
+
+            if self.buffered != 0 {
+                index += try!( (&self.buffer[..self.buffered] as &[u8]).read(buf) );
+                self.buffered -= index;
+            }
+            
+            if buf.len() == index { return Ok(index) };
+            debug_assert!( self.buffered == 0 );
+ 
+            while 0 != try!( self.inner.read(&mut local_buf) ) {
+                index += match local_buf[0] {
+                    b'&' => try!( self.try_read("&amp;".as_bytes(), index, buf) ),  
+                    b'<' => try!( self.try_read("&lt;".as_bytes(), index, buf) ),
+                    b'>' => try!( self.try_read("&gt;".as_bytes(), index, buf) ),
+                    b'"' => try!( self.try_read("&quot;".as_bytes(), index, buf) ),
+                    b'\'' => try!( self.try_read("&#39;".as_bytes(), index, buf) ),
+                    other => { buf[index] = other; 1 }
+                };
+                
+                if buf.len() == index { return Ok(index) };
+            }
+
+            return Ok(index);
         }
     }
 }
